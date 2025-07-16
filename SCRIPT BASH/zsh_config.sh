@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Script de pré-configuration Zsh pour éviter zsh-newuser-install
+# Script de post-configuration Zsh pour éviter zsh-newuser-install
 # À exécuter AVANT le script principal sur serveurs neufs
 # Usage: bash pre_zsh_setup.sh
 
