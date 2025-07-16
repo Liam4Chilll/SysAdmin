@@ -129,6 +129,24 @@ install_zsh() {
     print_message $CYAN "Version Zsh installée: $ZSH_VERSION"
 }
 
+# Fonction pour préparer Zsh et éviter zsh-newuser-install
+prepare_zsh_config() {
+    print_step "Préparation de la configuration Zsh..."
+    
+    # Créer un .zshrc temporaire pour éviter zsh-newuser-install
+    if [[ ! -f ~/.zshrc ]]; then
+        print_step "Création d'un .zshrc temporaire..."
+        echo "# Configuration Zsh temporaire - sera remplacée" > ~/.zshrc
+    fi
+    
+    # Créer aussi les autres fichiers pour éviter le message
+    touch ~/.zshenv 2>/dev/null || true
+    touch ~/.zprofile 2>/dev/null || true
+    touch ~/.zlogin 2>/dev/null || true
+    
+    print_success "Configuration Zsh préparée"
+}
+
 # Fonction pour changer le shell par défaut
 change_default_shell() {
     print_step "Configuration du shell par défaut..."
@@ -136,11 +154,22 @@ change_default_shell() {
     local current_shell=$(getent passwd $USER | cut -d: -f7)
     local zsh_path=$(which zsh)
     
+    # Vérifier si zsh est dans /etc/shells
+    if ! grep -q "^$zsh_path$" /etc/shells; then
+        print_step "Ajout de Zsh à /etc/shells..."
+        echo "$zsh_path" | sudo tee -a /etc/shells
+    fi
+    
     if [[ "$current_shell" != "$zsh_path" ]]; then
         print_step "Changement du shell par défaut vers Zsh..."
-        chsh -s "$zsh_path"
+        
+        # Utiliser chsh avec confirmation automatique
+        echo "$zsh_path" | sudo chsh -s "$zsh_path" "$USER" 2>/dev/null || {
+            # Alternative si chsh échoue
+            sudo usermod -s "$zsh_path" "$USER"
+        }
+        
         print_success "Shell par défaut changé vers Zsh"
-        print_warning "Vous devrez vous reconnecter pour que le changement prenne effet"
     else
         print_success "Zsh est déjà le shell par défaut"
     fi
@@ -882,6 +911,7 @@ main() {
     update_system
     install_dependencies
     install_zsh
+    prepare_zsh_config  # NOUVEAU: Préparer avant les plugins
     create_directories
     install_zsh_plugins
     create_zshrc
@@ -896,8 +926,17 @@ main() {
     test_configuration
     show_final_info
     
-    print_message $GREEN "🚀 Installation terminée ! Reconnectez-vous pour utiliser Zsh."
-    print_message $CYAN "📚 N'oubliez pas de taper 'zsh_help' après reconnexion !"
+    print_message $GREEN "🚀 Installation terminée ! Tapez 'exec zsh' pour activer immédiatement."
+    print_message $CYAN "📚 N'oubliez pas de taper 'zsh_help' pour l'aide complète !"
+    
+    # Proposer l'activation immédiate
+    echo
+    read -p "Voulez-vous activer Zsh immédiatement ? (Y/n): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+        print_message $GREEN "🎉 Activation de Zsh..."
+        exec zsh
+    fi
 }
 
 # Gestion des erreurs
