@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Script de modification IP fixe - Simple et direct
+# Script de modification IP fixe - Interface
 # Usage: ./set-ip.sh
 
 set -e
