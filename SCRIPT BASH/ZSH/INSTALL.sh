@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# Script d'installation complète Zsh avec configuration visuelle
-# Pour serveur Ubuntu neuf
-# Usage: bash setup_zsh.sh
+# Script d'installation Zsh pour serveurs homelab production
+# Version avec RAM/CPU explicites en temps réel
+# Usage: bash setup_zsh_homelab.sh
 
 set -e  # Arrêter le script en cas d'erreur
 
@@ -51,572 +51,215 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
-# Fonction pour vérifier les droits sudo
-check_sudo() {
-    if ! sudo -n true 2>/dev/null; then
-        print_error "Ce script nécessite les droits sudo. Veuillez vous assurer d'avoir les permissions nécessaires."
-        exit 1
-    fi
-}
-
-# Fonction pour détecter la distribution
-detect_os() {
-    if [[ -f /etc/os-release ]]; then
-        . /etc/os-release
-        OS=$NAME
-        VERSION=$VERSION_ID
-    else
-        print_error "Impossible de détecter la distribution. Ce script est conçu pour Ubuntu."
-        exit 1
-    fi
+# Fonction pour installer et configurer Zsh en une seule fois
+install_and_configure_zsh() {
+    print_step "Installation et configuration Zsh complète..."
     
-    if [[ $OS != *"Ubuntu"* ]]; then
-        print_warning "Ce script est optimisé pour Ubuntu. Votre système: $OS"
-        read -p "Voulez-vous continuer quand même ? (y/N): " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            exit 1
-        fi
-    fi
-}
-
-# Fonction pour mettre à jour le système
-update_system() {
-    print_step "Mise à jour du système..."
-    sudo apt update && sudo apt upgrade -y
-    print_success "Système mis à jour"
-}
-
-# Fonction pour installer les dépendances
-install_dependencies() {
-    print_step "Installation des dépendances..."
-    
-    local packages=(
-        "zsh"
-        "git"
-        "curl"
-        "wget"
-        "build-essential"
-        "software-properties-common"
-    )
-    
-    for package in "${packages[@]}"; do
-        if ! dpkg -l | grep -q "^ii  $package "; then
-            print_step "Installation de $package..."
-            sudo apt install -y "$package"
+    # Installation selon l'OS
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS
+        if command_exists brew; then
+            brew install zsh git curl
         else
-            print_message $YELLOW "$package est déjà installé"
+            print_warning "Homebrew non installé, utilisation des outils système"
+            # Zsh est déjà installé sur macOS récents
         fi
-    done
-    
-    print_success "Dépendances installées"
-}
-
-# Fonction pour installer Zsh
-install_zsh() {
-    print_step "Vérification de l'installation de Zsh..."
-    
-    if command_exists zsh; then
-        print_success "Zsh est déjà installé: $(zsh --version)"
     else
-        print_step "Installation de Zsh..."
-        sudo apt install -y zsh
-        print_success "Zsh installé"
+        # Linux
+        sudo apt update && sudo apt install -y zsh git curl
     fi
     
-    # Vérifier la version
-    ZSH_VERSION=$(zsh --version | cut -d' ' -f2)
-    print_message $CYAN "Version Zsh installée: $ZSH_VERSION"
+    # Création des dossiers
+    mkdir -p ~/.zsh/plugins ~/.config/zsh
+    
+    # Installation plugins en parallèle
+    (
+        if [[ ! -d ~/.zsh/plugins/zsh-syntax-highlighting ]]; then
+            git clone --depth=1 https://github.com/zsh-users/zsh-syntax-highlighting.git ~/.zsh/plugins/zsh-syntax-highlighting
+        fi
+    ) &
+    
+    (
+        if [[ ! -d ~/.zsh/plugins/zsh-autosuggestions ]]; then
+            git clone --depth=1 https://github.com/zsh-users/zsh-autosuggestions ~/.zsh/plugins/zsh-autosuggestions
+        fi
+    ) &
+    
+    (
+        if [[ ! -d ~/.zsh/plugins/zsh-completions ]]; then
+            git clone --depth=1 https://github.com/zsh-users/zsh-completions ~/.zsh/plugins/zsh-completions
+        fi
+    ) &
+    
+    wait  # Attendre que tous les plugins se téléchargent
+    
+    print_success "Plugins installés en parallèle"
 }
 
-# Fonction pour préparer Zsh et éviter zsh-newuser-install
-prepare_zsh_config() {
-    print_step "Préparation de la configuration Zsh..."
-    
-    # Créer un .zshrc temporaire pour éviter zsh-newuser-install
-    if [[ ! -f ~/.zshrc ]]; then
-        print_step "Création d'un .zshrc temporaire..."
-        echo "# Configuration Zsh temporaire - sera remplacée" > ~/.zshrc
-    fi
-    
-    # Créer aussi les autres fichiers pour éviter le message
-    touch ~/.zshenv 2>/dev/null || true
-    touch ~/.zprofile 2>/dev/null || true
-    touch ~/.zlogin 2>/dev/null || true
-    
-    print_success "Configuration Zsh préparée"
-}
-
-# Fonction pour changer le shell par défaut
-change_default_shell() {
-    print_step "Configuration du shell par défaut..."
-    
-    local current_shell=$(getent passwd $USER | cut -d: -f7)
-    local zsh_path=$(which zsh)
-    
-    # Vérifier si zsh est dans /etc/shells
-    if ! grep -q "^$zsh_path$" /etc/shells; then
-        print_step "Ajout de Zsh à /etc/shells..."
-        echo "$zsh_path" | sudo tee -a /etc/shells
-    fi
-    
-    if [[ "$current_shell" != "$zsh_path" ]]; then
-        print_step "Changement du shell par défaut vers Zsh..."
-        
-        # Utiliser chsh avec confirmation automatique
-        echo "$zsh_path" | sudo chsh -s "$zsh_path" "$USER" 2>/dev/null || {
-            # Alternative si chsh échoue
-            sudo usermod -s "$zsh_path" "$USER"
-        }
-        
-        print_success "Shell par défaut changé vers Zsh"
-    else
-        print_success "Zsh est déjà le shell par défaut"
-    fi
-}
-
-# Fonction pour créer les dossiers nécessaires
-create_directories() {
-    print_step "Création des dossiers de configuration..."
-    
-    mkdir -p ~/.zsh/plugins
-    mkdir -p ~/.zsh/themes
-    mkdir -p ~/.config/zsh
-    
-    print_success "Dossiers créés"
-}
-
-# Fonction pour installer les plugins Zsh
-install_zsh_plugins() {
-    print_step "Installation des plugins Zsh..."
-    
-    # Plugin: zsh-syntax-highlighting
-    if [[ ! -d ~/.zsh/plugins/zsh-syntax-highlighting ]]; then
-        print_step "Installation de zsh-syntax-highlighting..."
-        git clone https://github.com/zsh-users/zsh-syntax-highlighting.git ~/.zsh/plugins/zsh-syntax-highlighting
-        print_success "zsh-syntax-highlighting installé"
-    else
-        print_step "Mise à jour de zsh-syntax-highlighting..."
-        cd ~/.zsh/plugins/zsh-syntax-highlighting && git pull
-        print_success "zsh-syntax-highlighting mis à jour"
-    fi
-    
-    # Plugin: zsh-autosuggestions
-    if [[ ! -d ~/.zsh/plugins/zsh-autosuggestions ]]; then
-        print_step "Installation de zsh-autosuggestions..."
-        git clone https://github.com/zsh-users/zsh-autosuggestions ~/.zsh/plugins/zsh-autosuggestions
-        print_success "zsh-autosuggestions installé"
-    else
-        print_step "Mise à jour de zsh-autosuggestions..."
-        cd ~/.zsh/plugins/zsh-autosuggestions && git pull
-        print_success "zsh-autosuggestions mis à jour"
-    fi
-    
-    # Plugin: zsh-completions (bonus)
-    if [[ ! -d ~/.zsh/plugins/zsh-completions ]]; then
-        print_step "Installation de zsh-completions..."
-        git clone https://github.com/zsh-users/zsh-completions ~/.zsh/plugins/zsh-completions
-        print_success "zsh-completions installé"
-    else
-        print_step "Mise à jour de zsh-completions..."
-        cd ~/.zsh/plugins/zsh-completions && git pull
-        print_success "zsh-completions mis à jour"
-    fi
-}
-
-# Fonction pour installer Docker (optionnel)
-install_docker() {
-    read -p "Voulez-vous installer Docker ? (y/N): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        print_step "Installation de Docker..."
-        
-        # Supprimer les anciennes versions
-        sudo apt remove -y docker docker-engine docker.io containerd runc 2>/dev/null || true
-        
-        # Installer les dépendances
-        sudo apt install -y apt-transport-https ca-certificates curl gnupg lsb-release
-        
-        # Ajouter la clé GPG officielle de Docker
-        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-        
-        # Ajouter le repository Docker
-        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-        
-        # Installer Docker
-        sudo apt update
-        sudo apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
-        
-        # Ajouter l'utilisateur au groupe docker
-        sudo usermod -aG docker $USER
-        
-        # Démarrer et activer Docker
-        sudo systemctl start docker
-        sudo systemctl enable docker
-        
-        print_success "Docker installé"
-        print_warning "Vous devrez vous reconnecter pour utiliser Docker sans sudo"
-    fi
-}
-
-# Fonction pour créer la configuration .zshrc
-create_zshrc() {
-    print_step "Création du fichier de configuration .zshrc..."
+# Fonction pour créer la configuration .zshrc homelab production
+create_homelab_zshrc() {
+    print_step "Création de la configuration .zshrc homelab..."
     
     # Sauvegarder l'ancien .zshrc s'il existe
-    if [[ -f ~/.zshrc ]]; then
-        print_step "Sauvegarde de l'ancien .zshrc..."
-        cp ~/.zshrc ~/.zshrc.backup.$(date +%Y%m%d_%H%M%S)
-        print_success "Ancien .zshrc sauvegardé"
-    fi
+    [[ -f ~/.zshrc ]] && cp ~/.zshrc ~/.zshrc.backup.$(date +%Y%m%d_%H%M%S)
     
-    # Créer le nouveau .zshrc
+    # Créer le nouveau .zshrc optimisé
     cat > ~/.zshrc << 'EOF'
-# Configuration Zsh visuelle avec icônes pour serveur Ubuntu
-# Généré automatiquement par setup_zsh.sh
+# Configuration Zsh pour serveurs homelab production
+# Version avec RAM/CPU explicites en temps réel
 
-# Configuration de base
+# ========================================
+# CONFIGURATION DE BASE
+# ========================================
+
+# Chargement des couleurs et options de base
 autoload -U colors && colors
 setopt PROMPT_SUBST
+setopt AUTO_CD
+setopt CORRECT
+setopt EXTENDED_GLOB
 
-# Historique
+# Configuration historique optimisée
 HISTFILE=~/.zsh_history
-HISTSIZE=10000
-SAVEHIST=10000
+HISTSIZE=50000
+SAVEHIST=50000
 setopt APPEND_HISTORY
 setopt SHARE_HISTORY
 setopt HIST_IGNORE_DUPS
 setopt HIST_IGNORE_ALL_DUPS
 setopt HIST_FIND_NO_DUPS
 setopt HIST_SAVE_NO_DUPS
+setopt HIST_IGNORE_SPACE
+setopt HIST_REDUCE_BLANKS
 
 # Configuration d'autocomplétion avancée
 autoload -U compinit && compinit -u
 
-# Style de complétion
+# ========================================
+# CONFIGURATION VISUELLE DES FICHIERS
+# ========================================
+
+# Couleurs pour ls optimisées pour serveur
+export CLICOLOR=1
+export LSCOLORS=ExGxBxDxCxEgEdxbxgxcxd
+
+# Configuration LS_COLORS détaillée pour navigation élégante
+export LS_COLORS='rs=0:di=01;34:ln=01;36:mh=00:pi=40;33:so=01;35:do=01;35:bd=40;33;01:cd=40;33;01:or=40;31;01:mi=00:su=37;41:sg=30;43:ca=30;41:tw=30;42:ow=34;42:st=37;44:ex=01;32:*.tar=01;31:*.tgz=01;31:*.arc=01;31:*.arj=01;31:*.taz=01;31:*.lha=01;31:*.lz4=01;31:*.lzh=01;31:*.lzma=01;31:*.tlz=01;31:*.txz=01;31:*.tzo=01;31:*.t7z=01;31:*.zip=01;31:*.z=01;31:*.dz=01;31:*.gz=01;31:*.lrz=01;31:*.lz=01;31:*.lzo=01;31:*.xz=01;31:*.zst=01;31:*.tzst=01;31:*.bz2=01;31:*.bz=01;31:*.tbz=01;31:*.tbz2=01;31:*.tz=01;31:*.deb=01;31:*.rpm=01;31:*.jar=01;31:*.war=01;31:*.ear=01;31:*.sar=01;31:*.rar=01;31:*.alz=01;31:*.ace=01;31:*.zoo=01;31:*.cpio=01;31:*.7z=01;31:*.rz=01;31:*.cab=01;31:*.wim=01;31:*.swm=01;31:*.dwm=01;31:*.esd=01;31:*.jpg=01;35:*.jpeg=01;35:*.mjpg=01;35:*.mjpeg=01;35:*.gif=01;35:*.bmp=01;35:*.pbm=01;35:*.pgm=01;35:*.ppm=01;35:*.tga=01;35:*.xbm=01;35:*.xpm=01;35:*.tif=01;35:*.tiff=01;35:*.png=01;35:*.svg=01;35:*.svgz=01;35:*.mng=01;35:*.pcx=01;35:*.mov=01;35:*.mpg=01;35:*.mpeg=01;35:*.m2v=01;35:*.mkv=01;35:*.webm=01;35:*.ogm=01;35:*.mp4=01;35:*.m4v=01;35:*.mp4v=01;35:*.vob=01;35:*.qt=01;35:*.nuv=01;35:*.wmv=01;35:*.asf=01;35:*.rm=01;35:*.rmvb=01;35:*.flc=01;35:*.avi=01;35:*.fli=01;35:*.flv=01;35:*.gl=01;35:*.dl=01;35:*.xcf=01;35:*.xwd=01;35:*.yuv=01;35:*.cgm=01;35:*.emf=01;35:*.ogv=01;35:*.ogx=01;35:*.py=01;33:*.js=01;33:*.json=01;33:*.yml=01;33:*.yaml=01;33:*.toml=01;33:*.ini=01;33:*.cfg=01;33:*.conf=01;33:*.log=00;37:*.md=01;37:*.txt=00;37:*.sh=01;32:*.bash=01;32:*.zsh=01;32:*.fish=01;32'
+
+# Style de complétion avec couleurs
 zstyle ':completion:*' menu select
 zstyle ':completion:*' group-name ''
 zstyle ':completion:*' verbose yes
-zstyle ':completion:*:descriptions' format '%B%d%b'
-zstyle ':completion:*:messages' format '%d'
-zstyle ':completion:*:warnings' format 'No matches for: %d'
+zstyle ':completion:*:descriptions' format '%B%F{blue}── %d ──%f%b'
+zstyle ':completion:*:messages' format '%F{green}%d%f'
+zstyle ':completion:*:warnings' format '%F{red}No matches for: %d%f'
 zstyle ':completion:*' list-colors ${(s.:.)LS_COLORS}
 
 # Complétion insensible à la casse
 zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}' 'r:|[._-]=* r:|=*' 'l:|=* r:|=*'
 
-# Complétion pour les commandes sudo
+# Complétion pour sudo
 zstyle ':completion:*:sudo:*' command-path /usr/local/sbin /usr/local/bin /usr/sbin /usr/bin /sbin /bin
 
 # ========================================
-# FONCTIONS GIT AVEC ICÔNES
+# FONCTIONS SYSTÈME TEMPS RÉEL
 # ========================================
 
-# Fonction Git simple avec icône
-git_prompt_simple() {
-  local branch=$(git symbolic-ref --short HEAD 2>/dev/null)
-  if [[ -n $branch ]]; then
-    local status=$(git status --porcelain 2>/dev/null)
-    local git_status=""
-    
-    if [[ -n $status ]]; then
-      git_status="%{$fg[red]%}●%{$reset_color%}"
+# Fonction pour RAM consommée en Go (temps réel explicite)
+ram_usage() {
+    local ram_used
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS - conversion en Go
+        local pages_used=$(vm_stat | grep "Pages active\|Pages inactive\|Pages speculative\|Pages wired down" | awk '{sum += $3} END {print sum}' | sed 's/\.//')
+        if [[ -n "$pages_used" && $pages_used -gt 0 ]]; then
+            # Conversion pages vers Go (page = 4096 bytes sur macOS)
+            ram_used=$(echo "scale=1; $pages_used * 4096 / 1024 / 1024 / 1024" | bc 2>/dev/null || echo "0.0")
+        else
+            ram_used="0.0"
+        fi
     else
-      git_status="%{$fg[green]%}●%{$reset_color%}"
+        # Linux - utilisation directe en Go
+        if command -v free >/dev/null 2>&1; then
+            ram_used=$(free -g | grep Mem | awk '{printf("%.1f", $3)}')
+        else
+            ram_used="0.0"
+        fi
     fi
-    
-    echo " %{$fg[blue]%} (%{$fg[yellow]%}$branch%{$fg[blue]%}) $git_status"
-  fi
+    echo "%{$fg[cyan]%}RAM: ${ram_used}Go%{$reset_color%}"
 }
 
-# Fonction Git détaillée avec symboles
-git_prompt_detailed() {
-  local branch=$(git symbolic-ref --short HEAD 2>/dev/null)
-  if [[ -n $branch ]]; then
-    local status=$(git status --porcelain 2>/dev/null)
-    local staged=$(echo "$status" | grep -E '^[MADRC]' | wc -l)
-    local unstaged=$(echo "$status" | grep -E '^.[MD]' | wc -l)
-    local untracked=$(echo "$status" | grep -E '^\?\?' | wc -l)
-    local stash=$(git stash list 2>/dev/null | wc -l)
-    
-    local git_info=" %{$fg[blue]%} (%{$fg[yellow]%}$branch%{$reset_color%}"
-    
-    # Modifications staged (prêtes à être commitées)
-    if [[ $staged -gt 0 ]]; then
-      git_info="$git_info %{$fg[green]%}+$staged%{$reset_color%}"
-    fi
-    
-    # Modifications non staged (modifiées mais pas ajoutées)
-    if [[ $unstaged -gt 0 ]]; then
-      git_info="$git_info %{$fg[red]%}!$unstaged%{$reset_color%}"
-    fi
-    
-    # Fichiers non trackés
-    if [[ $untracked -gt 0 ]]; then
-      git_info="$git_info %{$fg[yellow]%}?$untracked%{$reset_color%}"
-    fi
-    
-    # Stash
-    if [[ $stash -gt 0 ]]; then
-      git_info="$git_info %{$fg[magenta]%}⚑$stash%{$reset_color%}"
-    fi
-    
-    git_info="$git_info%{$reset_color%}$(git_upstream)%{$fg[blue]%})%{$reset_color%}"
-    echo $git_info
-  fi
-}
-
-# Fonction Git complète avec tous les symboles
-git_prompt_complete() {
-  local branch=$(git symbolic-ref --short HEAD 2>/dev/null)
-  if [[ -n $branch ]]; then
-    local status=$(git status --porcelain 2>/dev/null)
-    local staged=$(echo "$status" | grep -E '^[MADRC]' | wc -l)
-    local unstaged=$(echo "$status" | grep -E '^.[MD]' | wc -l)
-    local untracked=$(echo "$status" | grep -E '^\?\?' | wc -l)
-    local stash=$(git stash list 2>/dev/null | wc -l)
-    local conflicts=$(echo "$status" | grep -E '^UU|^AA|^DD' | wc -l)
-    
-    local git_info=" %{$fg[blue]%} (%{$fg[yellow]%}$branch%{$reset_color%}"
-    
-    # Modifications staged (✓ = prêt à commit)
-    if [[ $staged -gt 0 ]]; then
-      git_info="$git_info %{$fg[green]%}✓$staged%{$reset_color%}"
-    fi
-    
-    # Modifications non staged (△ = modifié)
-    if [[ $unstaged -gt 0 ]]; then
-      git_info="$git_info %{$fg[red]%}△$unstaged%{$reset_color%}"
-    fi
-    
-    # Fichiers non trackés (+ = nouveau)
-    if [[ $untracked -gt 0 ]]; then
-      git_info="$git_info %{$fg[yellow]%}+$untracked%{$reset_color%}"
-    fi
-    
-    # Conflits (✗ = conflit)
-    if [[ $conflicts -gt 0 ]]; then
-      git_info="$git_info %{$fg[red]%}✗$conflicts%{$reset_color%}"
-    fi
-    
-    # Stash (⚑ = stash)
-    if [[ $stash -gt 0 ]]; then
-      git_info="$git_info %{$fg[magenta]%}⚑$stash%{$reset_color%}"
-    fi
-    
-    git_info="$git_info%{$reset_color%}$(git_upstream)%{$fg[blue]%})%{$reset_color%}"
-    echo $git_info
-  fi
-}
-
-# Fonction pour la branche upstream avec symboles
-git_upstream() {
-  local upstream=$(git rev-parse --abbrev-ref @{upstream} 2>/dev/null)
-  if [[ -n $upstream ]]; then
-    local ahead=$(git rev-list --count @{upstream}..HEAD 2>/dev/null)
-    local behind=$(git rev-list --count HEAD..@{upstream} 2>/dev/null)
-    
-    if [[ $ahead -gt 0 && $behind -gt 0 ]]; then
-      echo " %{$fg[yellow]%}↕$ahead/$behind%{$reset_color%}"
-    elif [[ $ahead -gt 0 ]]; then
-      echo " %{$fg[green]%}↑$ahead%{$reset_color%}"
-    elif [[ $behind -gt 0 ]]; then
-      echo " %{$fg[red]%}↓$behind%{$reset_color%}"
+# Fonction pour CPU en temps réel avec pourcentage explicite
+cpu_usage() {
+    local cpu_percent
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS - utiliser top pour CPU instantané
+        cpu_percent=$(top -l 1 -n 0 | grep "CPU usage" | awk '{print $3}' | sed 's/%//')
+        if [[ -z "$cpu_percent" ]]; then
+            cpu_percent="0"
+        fi
     else
-      echo " %{$fg[green]%}≡%{$reset_color%}"
+        # Linux - utiliser top ou fallback sur load average
+        if command -v top >/dev/null 2>&1; then
+            cpu_percent=$(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | sed 's/%us,//')
+        else
+            # Fallback sur load average converti en pourcentage approximatif
+            local load_avg=$(uptime | awk -F'load average:' '{ print $2 }' | cut -d, -f1 | xargs)
+            local num_cores=$(nproc 2>/dev/null || echo 1)
+            cpu_percent=$(echo "scale=1; $load_avg * 100 / $num_cores" | bc 2>/dev/null || echo "0")
+        fi
     fi
-  fi
-}
-
-# ========================================
-# FONCTIONS DOCKER AVEC ICÔNES
-# ========================================
-
-# Fonction Docker simple avec icône baleine
-docker_prompt_simple() {
-  if command -v docker &> /dev/null; then
-    if docker info &> /dev/null 2>&1; then
-      local containers=$(docker ps -q 2>/dev/null | wc -l)
-      if [[ $containers -gt 0 ]]; then
-        echo " %{$fg[blue]%}🐳 $containers%{$reset_color%}"
-      else
-        echo " %{$fg[cyan]%}🐳%{$reset_color%}"
-      fi
+    
+    # Couleur adaptative selon l'usage CPU
+    local cpu_color="green"
+    if (( $(echo "$cpu_percent > 70" | bc -l 2>/dev/null || echo 0) )); then
+        cpu_color="red"
+    elif (( $(echo "$cpu_percent > 40" | bc -l 2>/dev/null || echo 0) )); then
+        cpu_color="yellow"
     fi
-  fi
-}
-
-# Fonction Docker détaillée
-docker_prompt_detailed() {
-  if command -v docker &> /dev/null; then
-    if docker info &> /dev/null 2>&1; then
-      local running=$(docker ps -q 2>/dev/null | wc -l)
-      local stopped=$(docker ps -aq --filter "status=exited" 2>/dev/null | wc -l)
-      local images=$(docker images -q 2>/dev/null | wc -l)
-      
-      local docker_info=" %{$fg[blue]%}🐳"
-      
-      # Conteneurs en cours d'exécution
-      if [[ $running -gt 0 ]]; then
-        docker_info="$docker_info %{$fg[green]%}▶$running%{$reset_color%}"
-      fi
-      
-      # Conteneurs arrêtés
-      if [[ $stopped -gt 0 ]]; then
-        docker_info="$docker_info %{$fg[red]%}■$stopped%{$reset_color%}"
-      fi
-      
-      # Images
-      if [[ $images -gt 0 ]]; then
-        docker_info="$docker_info %{$fg[cyan]%}📦$images%{$reset_color%}"
-      fi
-      
-      echo "$docker_info%{$reset_color%}"
-    fi
-  fi
-}
-
-# Fonction Docker complète avec Swarm
-docker_prompt_complete() {
-  if command -v docker &> /dev/null; then
-    if docker info &> /dev/null 2>&1; then
-      local running=$(docker ps -q 2>/dev/null | wc -l)
-      local stopped=$(docker ps -aq --filter "status=exited" 2>/dev/null | wc -l)
-      local images=$(docker images -q 2>/dev/null | wc -l)
-      local networks=$(docker network ls -q 2>/dev/null | wc -l)
-      local volumes=$(docker volume ls -q 2>/dev/null | wc -l)
-      
-      # Vérifier si Docker Swarm est actif
-      local swarm_status=$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null)
-      
-      local docker_info=" %{$fg[blue]%}🐳"
-      
-      # Conteneurs en cours d'exécution (▶ = running)
-      if [[ $running -gt 0 ]]; then
-        docker_info="$docker_info %{$fg[green]%}▶$running%{$reset_color%}"
-      fi
-      
-      # Conteneurs arrêtés (■ = stopped)
-      if [[ $stopped -gt 0 ]]; then
-        docker_info="$docker_info %{$fg[red]%}■$stopped%{$reset_color%}"
-      fi
-      
-      # Images (📦 = images)
-      if [[ $images -gt 0 ]]; then
-        docker_info="$docker_info %{$fg[cyan]%}📦$images%{$reset_color%}"
-      fi
-      
-      # Réseaux (🌐 = networks)
-      if [[ $networks -gt 3 ]]; then  # Plus que les réseaux par défaut
-        docker_info="$docker_info %{$fg[yellow]%}🌐$((networks-3))%{$reset_color%}"
-      fi
-      
-      # Volumes (💾 = volumes)
-      if [[ $volumes -gt 0 ]]; then
-        docker_info="$docker_info %{$fg[magenta]%}💾$volumes%{$reset_color%}"
-      fi
-      
-      # Swarm (⚡ = swarm active)
-      if [[ "$swarm_status" == "active" ]]; then
-        docker_info="$docker_info %{$fg[yellow]%}⚡%{$reset_color%}"
-      fi
-      
-      echo "$docker_info%{$reset_color%}"
-    fi
-  fi
-}
-
-# ========================================
-# FONCTIONS SYSTÈME
-# ========================================
-
-# Fonction pour l'heure
-current_time() {
-  echo "%{$fg[yellow]%}🕐 %D{%H:%M:%S}%{$reset_color%}"
+    
+    echo "%{$fg[$cpu_color]%}CPU: ${cpu_percent}%%%{$reset_color%}"
 }
 
 # Fonction pour le statut de la dernière commande
-last_command_status() {
-  echo "%(?:%{$fg[green]%}✓:%{$fg[red]%}✗)%{$reset_color%}"
+command_status() {
+    echo "%(?:%{$fg[green]%}✓:%{$fg[red]%}✗)%{$reset_color%}"
 }
 
-# Fonction pour afficher des informations système
-system_info() {
-  local load_avg=$(uptime | awk -F'load average:' '{ print $2 }' | cut -d, -f1 | xargs)
-  local memory_usage=$(free | grep Mem | awk '{printf("%.0f%%", $3/$2 * 100.0)}')
-  local disk_usage=$(df -h / | awk 'NR==2{printf "%s", $5}')
-  
-  echo " %{$fg[cyan]%}💻 Load:$load_avg Mem:$memory_usage Disk:$disk_usage%{$reset_color%}"
+# Fonction pour l'heure en extrémité droite
+current_time() {
+    echo "%{$fg[yellow]%}%D{%H:%M:%S}%{$reset_color%}"
 }
 
 # ========================================
-# THÈMES DE PROMPT
+# THÈMES AVEC INFORMATIONS EXPLICITES
 # ========================================
+
+# Fonction pour calculer la largeur du terminal et positionner l'heure à droite
+setup_rprompt() {
+    # Prompt de droite avec l'heure
+    RPROMPT='$(current_time)'
+}
 
 # Fonction pour changer de thème
 change_prompt() {
-  case $1 in
-    "minimal")
-      PROMPT='%{$fg[green]%}%1~%{$reset_color%}$(git_prompt_simple)$(docker_prompt_simple) %{$fg[blue]%}❯%{$reset_color%} '
-      ;;
-    "standard")
-      PROMPT='%{$fg[cyan]%}%n%{$reset_color%} %{$fg[white]%}@%{$reset_color%} %{$fg[magenta]%}%m%{$reset_color%} %{$fg[white]%}in%{$reset_color%} %{$fg[green]%}%~%{$reset_color%}$(git_prompt_detailed)$(docker_prompt_detailed)
-%{$fg[blue]%}❯%{$reset_color%} '
-      ;;
-    "complete")
-      PROMPT='%{$fg[cyan]%}%n%{$reset_color%} %{$fg[white]%}@%{$reset_color%} %{$fg[magenta]%}%m%{$reset_color%} %{$fg[white]%}in%{$reset_color%} %{$fg[green]%}%~%{$reset_color%}$(git_prompt_complete)$(docker_prompt_complete)
-%{$fg[blue]%}❯%{$reset_color%} '
-      ;;
-    "server")
-      PROMPT='%{$fg[blue]%}┌─%{$reset_color%} %{$fg[cyan]%}%n%{$reset_color%}%{$fg[white]%}@%{$reset_color%}%{$fg[magenta]%}%m%{$reset_color%} %{$fg[white]%}in%{$reset_color%} %{$fg[green]%}%~%{$reset_color%}$(git_prompt_complete)$(docker_prompt_complete)
-%{$fg[blue]%}└─❯%{$reset_color%} '
-      ;;
-    "devops")
-      PROMPT='%{$fg[blue]%}┌─%{$reset_color%} %{$fg[cyan]%}%n%{$reset_color%}%{$fg[white]%}@%{$reset_color%}%{$fg[magenta]%}%m%{$reset_color%} %{$fg[white]%}in%{$reset_color%} %{$fg[green]%}%~%{$reset_color%}$(git_prompt_complete)$(docker_prompt_complete)
-%{$fg[blue]%}└─❯%{$reset_color%} '
-      ;;
-    "time")
-      PROMPT='$(current_time) %{$fg[cyan]%}%n%{$reset_color%}%{$fg[white]%}@%{$reset_color%}%{$fg[magenta]%}%m%{$reset_color%} %{$fg[white]%}in%{$reset_color%} %{$fg[green]%}%~%{$reset_color%}$(git_prompt_complete)$(docker_prompt_complete)
-$(last_command_status) %{$fg[blue]%}❯%{$reset_color%} '
-      ;;
-    "dashboard")
-      PROMPT='%{$fg[blue]%}╭─%{$reset_color%} %{$fg[cyan]%}%n%{$reset_color%}%{$fg[white]%}@%{$reset_color%}%{$fg[magenta]%}%m%{$reset_color%} %{$fg[white]%}in%{$reset_color%} %{$fg[green]%}%~%{$reset_color%}$(git_prompt_complete)$(docker_prompt_complete)$(system_info)
-%{$fg[blue]%}╰─❯%{$reset_color%} '
-      ;;
-    *)
-      echo "Usage: change_prompt [theme]"
-      echo ""
-      echo "🎨 Thèmes disponibles:"
-      echo "  minimal   - Prompt simple avec icônes Git et Docker"
-      echo "  standard  - Prompt standard avec informations détaillées"
-      echo "  complete  - Prompt avec tous les symboles Git et Docker"
-      echo "  server    - Thème optimisé pour serveur avec bordures"
-      echo "  devops    - Thème spécialisé pour DevOps"
-      echo "  time      - Prompt avec heure et statut des commandes"
-      echo "  dashboard - Prompt avec informations système complètes"
-      echo ""
-      echo "🔤 Légende des symboles Git:"
-      echo "   = icône Git"
-      echo "  ✓ = modifications staged (prêtes à commit)"
-      echo "  △ = modifications non staged"
-      echo "  + = fichiers non trackés"
-      echo "  ✗ = conflits"
-      echo "  ⚑ = stash"
-      echo "  ↑ = commits en avance"
-      echo "  ↓ = commits en retard"
-      echo "  ↕ = divergence"
-      echo "  ≡ = à jour"
-      echo ""
-      echo "🐳 Légende des symboles Docker:"
-      echo "  🐳 = icône Docker"
-      echo "  ▶ = conteneurs en cours"
-      echo "  ■ = conteneurs arrêtés"
-      echo "  📦 = images"
-      echo "  🌐 = réseaux"
-      echo "  💾 = volumes"
-      echo "  ⚡ = Swarm actif"
-      ;;
-  esac
+    case $1 in
+        "light")
+            PROMPT='%{$fg[green]%}%1~%{$reset_color%} %{$fg[blue]%}❯%{$reset_color%} '
+            RPROMPT='$(current_time)'
+            ;;
+        "full")
+            PROMPT='%{$fg[blue]%}╭─%{$reset_color%} %{$fg[cyan]%}%n%{$reset_color%}%{$fg[white]%}@%{$reset_color%}%{$fg[blue]%}%m%{$reset_color%} %{$fg[white]%}in%{$reset_color%} %{$fg[green]%}%~%{$reset_color%} $(ram_usage) $(cpu_usage)
+%{$fg[blue]%}╰─%{$reset_color%}$(command_status) %{$fg[blue]%}❯%{$reset_color%} '
+            RPROMPT='$(current_time)'
+            ;;
+        *)
+            echo "Usage: change_prompt [theme]"
+            echo ""
+            echo "🎨 Thèmes disponibles:"
+            echo "  light - Prompt light et minimaliste avec heure à droite"
+            echo "  full  - Prompt full avec RAM/CPU explicites et heure à droite (par défaut)"
+            ;;
+    esac
 }
 
 # ========================================
@@ -625,324 +268,211 @@ $(last_command_status) %{$fg[blue]%}❯%{$reset_color%} '
 
 # Completions supplémentaires
 if [[ -d ~/.zsh/plugins/zsh-completions ]]; then
-  fpath=(~/.zsh/plugins/zsh-completions/src $fpath)
+    fpath=(~/.zsh/plugins/zsh-completions/src $fpath)
 fi
 
-# Syntax Highlighting
+# Syntax Highlighting avec couleurs optimisées
 if [[ -f ~/.zsh/plugins/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh ]]; then
-  source ~/.zsh/plugins/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
-  
-  # Configuration des couleurs personnalisées
-  ZSH_HIGHLIGHT_HIGHLIGHTERS=(main brackets pattern cursor)
-  ZSH_HIGHLIGHT_STYLES[default]=none
-  ZSH_HIGHLIGHT_STYLES[unknown-token]=fg=red,bold
-  ZSH_HIGHLIGHT_STYLES[reserved-word]=fg=cyan,bold
-  ZSH_HIGHLIGHT_STYLES[precommand]=fg=green,underline
-  ZSH_HIGHLIGHT_STYLES[commandseparator]=fg=blue,bold
-  ZSH_HIGHLIGHT_STYLES[path]=underline
-  ZSH_HIGHLIGHT_STYLES[globbing]=fg=blue,bold
-  ZSH_HIGHLIGHT_STYLES[single-quoted-argument]=fg=yellow
-  ZSH_HIGHLIGHT_STYLES[double-quoted-argument]=fg=yellow
-  ZSH_HIGHLIGHT_STYLES[comment]=fg=black,bold
-  ZSH_HIGHLIGHT_STYLES[arg0]=fg=green
+    source ~/.zsh/plugins/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
+    
+    # Configuration couleurs élégantes et sobres
+    ZSH_HIGHLIGHT_HIGHLIGHTERS=(main brackets pattern cursor)
+    ZSH_HIGHLIGHT_STYLES[default]=none
+    ZSH_HIGHLIGHT_STYLES[unknown-token]=fg=red,bold
+    ZSH_HIGHLIGHT_STYLES[reserved-word]=fg=cyan,bold
+    ZSH_HIGHLIGHT_STYLES[precommand]=fg=green,underline
+    ZSH_HIGHLIGHT_STYLES[commandseparator]=fg=blue,bold
+    ZSH_HIGHLIGHT_STYLES[path]=fg=blue,underline
+    ZSH_HIGHLIGHT_STYLES[globbing]=fg=magenta,bold
+    ZSH_HIGHLIGHT_STYLES[single-quoted-argument]=fg=yellow
+    ZSH_HIGHLIGHT_STYLES[double-quoted-argument]=fg=yellow
+    ZSH_HIGHLIGHT_STYLES[comment]=fg=black,bold
+    ZSH_HIGHLIGHT_STYLES[arg0]=fg=green,bold
 fi
 
-# Autosuggestions
+# Autosuggestions avec style sobre
 if [[ -f ~/.zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh ]]; then
-  source ~/.zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh
-  
-  # Configuration des autosuggestions
-  ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE="fg=8,italic"
-  ZSH_AUTOSUGGEST_STRATEGY=(history completion)
-  ZSH_AUTOSUGGEST_BUFFER_MAX_SIZE=20
-  ZSH_AUTOSUGGEST_USE_ASYNC=true
+    source ~/.zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh
+    
+    # Configuration autosuggestions élégantes
+    ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE="fg=8,italic"
+    ZSH_AUTOSUGGEST_STRATEGY=(history completion)
+    ZSH_AUTOSUGGEST_BUFFER_MAX_SIZE=20
+    ZSH_AUTOSUGGEST_USE_ASYNC=true
 fi
 
 # ========================================
 # CONFIGURATION ENVIRONNEMENT
 # ========================================
 
-# Couleurs pour ls
-export CLICOLOR=1
-export LSCOLORS=ExFxBxDxCxegedabagacad
-
-# Variables d'environnement pour Ubuntu
+# Variables d'environnement
 export EDITOR=nano
 export PAGER=less
-export BROWSER=w3m
-
-# PATH personnalisé
 export PATH="$HOME/.local/bin:$PATH"
 
 # Support UTF-8
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
 
-# ========================================
-# SECTION ALIASES (VIDE - PRÊTE POUR VOS AJOUTS)
-# ========================================
-
-# Vous pouvez ajouter vos aliases personnalisés ici
-# Exemple:
-# alias ll='ls -la'
-# alias gs='git status'
-# alias dps='docker ps'
+# macOS spécifique
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    export PATH="/opt/homebrew/bin:$PATH"
+fi
 
 # ========================================
-# PROMPT PAR DÉFAUT SERVEUR
+# PROMPT PAR DÉFAUT AVEC HEURE À DROITE
 # ========================================
 
-# Prompt par défaut optimisé pour serveur
-PROMPT='%{$fg[blue]%}┌─%{$reset_color%} %{$fg[cyan]%}%n%{$reset_color%}%{$fg[white]%}@%{$reset_color%}%{$fg[magenta]%}%m%{$reset_color%} %{$fg[white]%}in%{$reset_color%} %{$fg[green]%}%~%{$reset_color%}$(git_prompt_detailed)$(docker_prompt_detailed)
-%{$fg[blue]%}└─❯%{$reset_color%} '
+# Configuration du prompt de droite
+setup_rprompt
+
+# Prompt par défaut (full) avec RAM/CPU explicites
+PROMPT='%{$fg[blue]%}╭─%{$reset_color%} %{$fg[cyan]%}%n%{$reset_color%}%{$fg[white]%}@%{$reset_color%}%{$fg[blue]%}%m%{$reset_color%} %{$fg[white]%}in%{$reset_color%} %{$fg[green]%}%~%{$reset_color%} $(ram_usage) $(cpu_usage)
+%{$fg[blue]%}╰─%{$reset_color%}$(command_status) %{$fg[blue]%}❯%{$reset_color%} '
+
+# Prompt de droite avec heure
+RPROMPT='$(current_time)'
 
 # ========================================
 # UTILITAIRES
 # ========================================
 
-# Raccourcis pour la configuration
-alias zshconfig="$EDITOR ~/.zshrc"
-alias zshreload="source ~/.zshrc"
-
 # Fonction d'aide
 zsh_help() {
-  echo "🚀 Configuration Zsh pour serveur Ubuntu"
-  echo ""
-  echo "📋 Commandes principales:"
-  echo "  change_prompt [theme] - Changer le thème du prompt"
-  echo "  zsh_help              - Afficher cette aide"
-  echo "  zshconfig             - Éditer la configuration"
-  echo "  zshreload             - Recharger la configuration"
-  echo ""
-  echo "🎨 Thèmes disponibles:"
-  echo "  minimal, standard, complete, server, devops, time, dashboard"
-  echo ""
-  echo "🔧 Plugins installés:"
-  [[ -f ~/.zsh/plugins/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh ]] && echo "  ✅ Syntax Highlighting" || echo "  ❌ Syntax Highlighting"
-  [[ -f ~/.zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh ]] && echo "  ✅ Autosuggestions" || echo "  ❌ Autosuggestions"
-  [[ -f ~/.zsh/plugins/zsh-completions/zsh-completions.plugin.zsh ]] && echo "  ✅ Enhanced Completions" || echo "  ❌ Enhanced Completions"
-  echo ""
-  echo "🐳 Docker installé:" $(command -v docker &> /dev/null && echo "✅ Oui" || echo "❌ Non")
-  echo ""
-  echo "📖 Aide rapide:"
-  echo "  - Tapez 'Tab' pour l'autocomplétion"
-  echo "  - Utilisez les flèches pour naviguer dans l'historique"
-  echo "  - Les suggestions apparaissent automatiquement en gris"
-  echo "  - Appuyez sur 'Ctrl+R' pour la recherche dans l'historique"
+    echo "🏠 Configuration Zsh pour serveurs homelab production"
+    echo ""
+    echo "📋 Commandes principales:"
+    echo "  change_prompt [theme] - Changer le thème du prompt"
+    echo "  zsh_help              - Afficher cette aide"
+    echo ""
+    echo "🎨 Thèmes disponibles:"
+    echo "  light - Prompt light avec heure à droite"
+    echo "  full  - Prompt full avec RAM/CPU temps réel et heure à droite (par défaut)"
+    echo ""
+    echo "📊 Informations système temps réel:"
+    echo "  RAM: XX.XGo - Mémoire consommée en gigaoctets"
+    echo "  CPU: XX%    - Pourcentage d'utilisation processeur"
+    echo "  Heure       - Affichée à droite du terminal (HH:MM:SS)"
+    echo ""
+    echo "🔧 Plugins installés:"
+    [[ -f ~/.zsh/plugins/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh ]] && echo "  ✅ Syntax Highlighting" || echo "  ❌ Syntax Highlighting"
+    [[ -f ~/.zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh ]] && echo "  ✅ Autosuggestions" || echo "  ❌ Autosuggestions"
+    [[ -d ~/.zsh/plugins/zsh-completions ]] && echo "  ✅ Enhanced Completions" || echo "  ❌ Enhanced Completions"
+    echo ""
+    echo "📖 Navigation:"
+    echo "  - Tab pour l'autocomplétion avec couleurs"
+    echo "  - Ctrl+R pour recherche historique"
+    echo "  - Suggestions automatiques en gris"
+    echo "  - Correction automatique des commandes"
+    echo "  - Couleurs adaptatives CPU (vert<40%, jaune<70%, rouge>70%)"
 }
 
 # Message de bienvenue
-echo "🎨 Configuration Zsh pour serveur Ubuntu chargée !"
+echo "🏠 Configuration Zsh homelab avec monitoring temps réel !"
 echo "📚 Tapez 'zsh_help' pour l'aide complète"
-echo "🎨 Tapez 'change_prompt server' pour le thème serveur optimisé"
+echo "🎨 Thème actuel: Full avec RAM/CPU explicites et heure à droite"
 EOF
 
-    print_success "Fichier .zshrc créé"
+    print_success "Configuration .zshrc homelab créée"
 }
 
-# Fonction pour configurer Git (optionnel)
-configure_git() {
-    read -p "Voulez-vous configurer Git ? (y/N): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        print_step "Configuration de Git..."
-        
-        read -p "Nom d'utilisateur Git: " git_name
-        read -p "Email Git: " git_email
-        
-        git config --global user.name "$git_name"
-        git config --global user.email "$git_email"
-        git config --global init.defaultBranch main
-        git config --global pull.rebase false
-        
-        print_success "Git configuré"
+# Fonction pour configuration instantanée et persistante
+apply_instant_configuration() {
+    print_step "Application instantanée et persistante de Zsh..."
+    
+    # Changer le shell par défaut
+    local zsh_path=$(which zsh)
+    
+    # Ajouter zsh à /etc/shells si nécessaire
+    if ! grep -q "^$zsh_path$" /etc/shells; then
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            echo "$zsh_path" | sudo tee -a /etc/shells
+        else
+            echo "$zsh_path" | sudo tee -a /etc/shells
+        fi
     fi
+    
+    # Changer le shell par défaut selon l'OS
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS
+        chsh -s "$zsh_path"
+    else
+        # Linux
+        sudo chsh -s "$zsh_path" "$USER" 2>/dev/null || sudo usermod -s "$zsh_path" "$USER"
+    fi
+    
+    print_success "Shell par défaut configuré"
 }
 
-# Fonction pour tester la configuration
-test_configuration() {
-    print_step "Test de la configuration..."
+# Fonction pour tester la configuration rapidement
+quick_test() {
+    print_step "Test rapide de la configuration..."
     
-    # Tester Zsh
-    if command_exists zsh; then
-        print_success "Zsh: OK"
-    else
-        print_error "Zsh: ERREUR"
-    fi
-    
-    # Tester Git
-    if command_exists git; then
-        print_success "Git: OK"
-    else
-        print_warning "Git: Non installé"
-    fi
-    
-    # Tester Docker
-    if command_exists docker; then
-        print_success "Docker: OK"
-    else
-        print_warning "Docker: Non installé"
-    fi
-    
-    # Tester les plugins
-    if [[ -f ~/.zsh/plugins/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh ]]; then
-        print_success "Plugin Syntax Highlighting: OK"
-    else
-        print_error "Plugin Syntax Highlighting: ERREUR"
-    fi
-    
-    if [[ -f ~/.zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh ]]; then
-        print_success "Plugin Autosuggestions: OK"
-    else
-        print_error "Plugin Autosuggestions: ERREUR"
-    fi
-    
-    # Tester le fichier .zshrc
-    if [[ -f ~/.zshrc ]]; then
-        print_success "Fichier .zshrc: OK"
-    else
-        print_error "Fichier .zshrc: ERREUR"
-    fi
+    # Tests essentiels
+    command_exists zsh && print_success "Zsh: ✓" || print_error "Zsh: ✗"
+    [[ -f ~/.zshrc ]] && print_success "Config: ✓" || print_error "Config: ✗"
+    [[ -d ~/.zsh/plugins ]] && print_success "Plugins: ✓" || print_error "Plugins: ✗"
 }
 
-# Fonction pour créer un script de désinstallation
-create_uninstall_script() {
-    print_step "Création du script de désinstallation..."
-    
-    cat > ~/uninstall_zsh.sh << 'EOF'
-#!/bin/bash
-# Script de désinstallation Zsh
-
-echo "🗑️  Désinstallation de la configuration Zsh..."
-
-# Restaurer le shell par défaut
-chsh -s /bin/bash
-
-# Sauvegarder puis supprimer la configuration
-if [[ -f ~/.zshrc ]]; then
-    mv ~/.zshrc ~/.zshrc.uninstalled.$(date +%Y%m%d_%H%M%S)
-    echo "✅ Configuration .zshrc sauvegardée"
-fi
-
-# Supprimer les plugins (optionnel)
-read -p "Voulez-vous supprimer les plugins Zsh ? (y/N): " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    rm -rf ~/.zsh/plugins
-    echo "✅ Plugins supprimés"
-fi
-
-# Supprimer Zsh (optionnel)
-read -p "Voulez-vous désinstaller Zsh complètement ? (y/N): " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    sudo apt remove -y zsh
-    echo "✅ Zsh désinstallé"
-fi
-
-echo "🎯 Désinstallation terminée. Reconnectez-vous pour que les changements prennent effet."
-EOF
-
-    chmod +x ~/uninstall_zsh.sh
-    print_success "Script de désinstallation créé: ~/uninstall_zsh.sh"
-}
-
-# Fonction pour afficher les informations finales
-show_final_info() {
-    print_header "INSTALLATION TERMINÉE"
-    
-    print_message $GREEN "🎉 Installation de Zsh terminée avec succès !"
-    echo
-    print_message $CYAN "📋 Résumé de l'installation:"
-    echo "   ✅ Zsh installé et configuré"
-    echo "   ✅ Plugins installés (syntax-highlighting, autosuggestions, completions)"
-    echo "   ✅ Configuration visuelle avec icônes Git et Docker"
-    echo "   ✅ Shell par défaut changé vers Zsh"
-    [[ $(command -v docker) ]] && echo "   ✅ Docker installé" || echo "   ❌ Docker non installé"
-    echo
-    print_message $YELLOW "📖 Prochaines étapes:"
-    echo "   1. Reconnectez-vous pour que Zsh devienne actif"
-    echo "   2. Tapez 'zsh_help' pour voir toutes les options"
-    echo "   3. Utilisez 'change_prompt [theme]' pour changer l'apparence"
-    echo "   4. Ajoutez vos aliases dans la section dédiée du .zshrc"
-    echo
-    print_message $CYAN "🎨 Thèmes recommandés pour serveur:"
-    echo "   • change_prompt server    (optimisé serveur)"
-    echo "   • change_prompt devops    (pour DevOps)"
-    echo "   • change_prompt dashboard (avec infos système)"
-    echo
-    print_message $PURPLE "🔧 Fichiers créés:"
-    echo "   • ~/.zshrc (configuration principale)"
-    echo "   • ~/.zsh/plugins/ (dossier des plugins)"
-    echo "   • ~/uninstall_zsh.sh (script de désinstallation)"
-    echo
-    print_message $BLUE "💡 Conseils:"
-    echo "   • Utilisez Tab pour l'autocomplétion"
-    echo "   • Ctrl+R pour rechercher dans l'historique"
-    echo "   • Les suggestions apparaissent en gris"
-    echo "   • Tapez 'zshconfig' pour éditer la configuration"
-    echo
-}
-
-# Fonction principale
+# Fonction principale optimisée
 main() {
-    print_header "INSTALLATION ZSH POUR SERVEUR UBUNTU"
+    print_header "INSTALLATION ZSH HOMELAB AVEC MONITORING TEMPS RÉEL"
     
-    print_message $CYAN "Ce script va installer et configurer:"
-    echo "  • Zsh avec configuration visuelle"
+    print_message $CYAN "Installation homelab avec monitoring explicite:"
+    echo "  • Zsh avec RAM/CPU en temps réel"
+    echo "  • RAM affichée en Go (ex: RAM: 8.2Go)"
+    echo "  • CPU en pourcentage avec couleurs (ex: CPU: 45%)"
+    echo "  • Heure positionnée à droite du terminal"
     echo "  • Plugins: syntax-highlighting, autosuggestions, completions"
-    echo "  • Support Git avec icônes et symboles"
-    echo "  • Support Docker avec informations d'infrastructure"
-    echo "  • Docker (optionnel)"
+    echo "  • Activation immédiate et persistante"
     echo
     
-    read -p "Voulez-vous continuer ? (Y/n): " -n 1 -r
+    read -p "Continuer l'installation ? (Y/n): " -n 1 -r
     echo
-    if [[ $REPLY =~ ^[Nn]$ ]]; then
-        print_message $YELLOW "Installation annulée."
-        exit 0
-    fi
+    [[ $REPLY =~ ^[Nn]$ ]] && exit 0
     
-    # Vérifications préliminaires
-    detect_os
-    check_sudo
+    # Installation et configuration en une fois
+    install_and_configure_zsh
+    create_homelab_zshrc
+    apply_instant_configuration
+    quick_test
     
-    # Installation
-    update_system
-    install_dependencies
-    install_zsh
-    prepare_zsh_config  # NOUVEAU: Préparer avant les plugins
-    create_directories
-    install_zsh_plugins
-    create_zshrc
-    
-    # Optionnels
-    install_docker
-    configure_git
-    
-    # Finalisation
-    change_default_shell
-    create_uninstall_script
-    test_configuration
-    show_final_info
-    
-    print_message $GREEN "🚀 Installation terminée ! Tapez 'exec zsh' pour activer immédiatement."
-    print_message $CYAN "📚 N'oubliez pas de taper 'zsh_help' pour l'aide complète !"
-    
-    # Proposer l'activation immédiate
+    print_header "INSTALLATION TERMINÉE"
+    print_message $GREEN "🎉 Zsh homelab avec monitoring temps réel prêt !"
     echo
-    read -p "Voulez-vous activer Zsh immédiatement ? (Y/n): " -n 1 -r
+    print_message $CYAN "📋 Configuration appliquée:"
+    echo "   ✅ Zsh installé et configuré pour homelab"
+    echo "   ✅ Monitoring RAM en Go (temps réel)"
+    echo "   ✅ Monitoring CPU en % avec couleurs adaptatives"
+    echo "   ✅ Heure affichée à droite du terminal"
+    echo "   ✅ Plugins avec couleurs élégantes"
+    echo "   ✅ Shell par défaut changé (persistant)"
+    echo "   ✅ Thème full par défaut avec toutes les infos"
+    echo
+    print_message $YELLOW "🚀 Activation immédiate:"
+    echo "   • Tapez 'exec zsh' pour activer maintenant"
+    echo "   • Ou reconnectez-vous pour activation automatique"
+    echo "   • Tapez 'zsh_help' pour voir toutes les options"
+    echo
+    print_message $PURPLE "📊 Informations temps réel:"
+    echo "   • RAM: XX.XGo - Mémoire consommée explicite"
+    echo "   • CPU: XX% - Pourcentage avec couleurs (vert/jaune/rouge)"
+    echo "   • HH:MM:SS - Heure en temps réel à droite"
+    
+    # Activation immédiate proposée
+    echo
+    read -p "Activer Zsh immédiatement ? (Y/n): " -n 1 -r
     echo
     if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-        print_message $GREEN "🎉 Activation de Zsh..."
+        print_message $GREEN "🏠 Lancement de Zsh avec monitoring temps réel..."
         exec zsh
     fi
 }
 
 # Gestion des erreurs
-trap 'print_error "Une erreur est survenue. Installation interrompue."; exit 1' ERR
+trap 'print_error "Erreur installation. Vérifiez les permissions."; exit 1' ERR
 
-# Vérifier si le script est exécuté directement
+# Exécution
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     main "$@"
 fi
